@@ -188,7 +188,7 @@ public class MainActivity extends Activity {
         if(inputPath==null)return;
         try{
             final String model=ensureModel();
-            outputPath=new File(getExternalFilesDir(Environment.DIRECTORY_MUSIC),"SHIR/"+System.currentTimeMillis()).getAbsolutePath();
+            outputPath=new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),"SHIR/"+System.currentTimeMillis()).getAbsolutePath();
             new File(outputPath).mkdirs();
             status.setText("מכין מנוע הפרדה מקומי…");
             progress.setProgress(0);
