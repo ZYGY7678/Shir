@@ -29,7 +29,7 @@ public class SeparationService extends IntentService {
             PendingIntent pi=PendingIntent.getActivity(this,0,open,PendingIntent.FLAG_UPDATE_CURRENT);
             Notification n=new Notification.Builder(this)
                     .setContentTitle("SHIR")
-                    .setContentText("מפריד ערוצים אופליין…")
+                    .setContentText("מפריד את השיר לערוצים אופליין…")
                     .setSmallIcon(android.R.drawable.ic_media_play)
                     .setContentIntent(pi)
                     .setOngoing(true)
