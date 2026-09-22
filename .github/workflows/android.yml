@@ -28,10 +28,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 12266719
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" || true
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
 
       - name: Install Android 4.4 build toolchain
         shell: bash
