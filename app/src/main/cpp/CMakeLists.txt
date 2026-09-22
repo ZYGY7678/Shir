@@ -8,20 +8,24 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(DEMUCS_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/demucs.cpp)
 set(NYQUIST_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/libnyquist)
 
-file(GLOB DEMUCS_SOURCES "${DEMUCS_ROOT}/src/*.cpp")
-file(GLOB NYQUIST_SOURCES "${NYQUIST_ROOT}/src/*.cpp")
+# Build libnyquist with its complete bundled decoder sources.
+set(LIBNYQUIST_BUILD_EXAMPLE OFF CACHE BOOL "Disable libnyquist example" FORCE)
+add_subdirectory("${NYQUIST_ROOT}" "${CMAKE_BINARY_DIR}/libnyquist" EXCLUDE_FROM_ALL)
+
+file(GLOB DEMUCS_SOURCES
+    "${DEMUCS_ROOT}/src/*.cpp"
+    "${DEMUCS_ROOT}/src/*.c"
+)
 
 add_library(shir-native SHARED
     native_separator.cpp
     ${DEMUCS_SOURCES}
-    ${NYQUIST_SOURCES}
 )
 
 target_include_directories(shir-native PRIVATE
     "${DEMUCS_ROOT}/src"
     "${DEMUCS_ROOT}/vendor/eigen"
     "${NYQUIST_ROOT}/include"
-    "${NYQUIST_ROOT}/src"
 )
 
 target_compile_definitions(shir-native PRIVATE
@@ -36,4 +40,7 @@ target_compile_options(shir-native PRIVATE
 )
 
 find_library(log-lib log)
-target_link_libraries(shir-native ${log-lib})
+target_link_libraries(shir-native
+    libnyquist
+    ${log-lib}
+)
