@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <atomic>
 
 #include "model.hpp"
 #include "dsp.hpp"
@@ -25,8 +26,9 @@
 static std::unique_ptr<demucscpp::demucs_model> g_model;
 static std::mutex g_model_mutex;
 static std::mutex g_run_mutex;
-static volatile float g_progress = 0.0f;
-static volatile int g_running = 0;
+static std::atomic<float> g_progress(0.0f);
+static std::atomic<int> g_running(0);
+static std::mutex g_status_mutex;
 static std::string g_status = "idle";
 
 static std::string base_name(const std::string& path) {
@@ -38,7 +40,7 @@ static std::string base_name(const std::string& path) {
 }
 
 static void set_status(const std::string& s) {
-    g_status = s;
+    { std::lock_guard<std::mutex> lock(g_status_mutex); g_status = s; }
     LOGI("%s", s.c_str());
 }
 
@@ -106,10 +108,10 @@ static Eigen::MatrixXf sum_sources(const Eigen::Tensor3dXf& out, const std::vect
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_shir_stems_NativeSeparator_nativeSeparate(
         JNIEnv* env, jclass, jstring jInput, jstring jModel, jstring jOutput) {
-    if (g_running) return JNI_FALSE;
+    if (g_running.load() != 0) return JNI_FALSE;
     std::lock_guard<std::mutex> runLock(g_run_mutex);
-    g_running = 1;
-    g_progress = 0.0f;
+    if (g_running.exchange(1) != 0) return JNI_FALSE;
+    g_progress.store(0.0f);
     set_status("loading");
 
     const char* inputC = env->GetStringUTFChars(jInput, nullptr);
@@ -154,8 +156,8 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
 
         set_status("separating");
         demucscpp::ProgressCallback cb = [](float p, const std::string& message) {
-            g_progress = std::max(0.0f, std::min(0.99f, p));
-            g_status = message;
+            g_progress.store(std::max(0.0f, std::min(0.99f, p)));
+            { std::lock_guard<std::mutex> lock(g_status_mutex); g_status = message; }
         };
 
         Eigen::Tensor3dXf stems = demucscpp::demucs_inference(*g_model, audio, cb);
@@ -169,7 +171,7 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
                 g_running = 0;
                 return JNI_FALSE;
             }
-            g_progress = 0.78f + 0.05f * s;
+            g_progress.store(0.78f + 0.05f * s);
         }
 
         if (!write_wave(sum_sources(stems, {0,1,2}, n), outDir + "/instrumental.wav")) {
@@ -183,7 +185,7 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
             return JNI_FALSE;
         }
 
-        g_progress = 1.0f;
+        g_progress.store(1.0f);
         set_status("done");
         g_running = 0;
         return JNI_TRUE;
@@ -196,10 +198,11 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
 
 extern "C" JNIEXPORT jfloat JNICALL
 Java_com_shir_stems_NativeSeparator_nativeProgress(JNIEnv*, jclass) {
-    return g_progress;
+    return g_progress.load();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_shir_stems_NativeSeparator_nativeStatus(JNIEnv* env, jclass) {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
     return env->NewStringUTF(g_status.c_str());
 }
