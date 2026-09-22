@@ -37,6 +37,8 @@ target_compile_options(shir-native PRIVATE
     -O3
     -ffast-math
     -fvisibility=hidden
+    -fexceptions
+    -frtti
 )
 
 find_library(log-lib log)
