@@ -78,7 +78,7 @@ static bool write_wave(const Eigen::MatrixXf& wav, const std::string& path) {
         data->samples[(size_t)i * 2] = wav(0, i);
         data->samples[(size_t)i * 2 + 1] = wav(1, i);
     }
-    int status = nqr::encode_wav_to_disk({data->channelCount, nqr::PCM_S16, nqr::DITHER_TRIANGLE}, data.get(), path);
+    int status = nqr::encode_wav_to_disk({data->channelCount, nqr::PCM_16, nqr::DITHER_TRIANGLE}, data.get(), path);
     return status == 0;
 }
 
