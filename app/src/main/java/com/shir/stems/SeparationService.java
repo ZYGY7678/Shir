@@ -47,9 +47,14 @@ public class SeparationService extends IntentService {
 
         new java.io.File(output).mkdirs();
 
+        final boolean[] success = new boolean[]{false};
         Thread worker=new Thread(new Runnable() {
             @Override public void run() {
-                NativeSeparator.nativeSeparate(input,model,output);
+                try {
+                    success[0] = NativeSeparator.nativeSeparate(input,model,output);
+                } catch(Throwable t) {
+                    success[0] = false;
+                }
             }
         });
         worker.start();
@@ -62,11 +67,20 @@ public class SeparationService extends IntentService {
             try { Thread.sleep(500); } catch(InterruptedException ignored) {}
         }
 
-        Intent done=new Intent(ACTION_DONE);
-        done.putExtra(EXTRA_PROGRESS,NativeSeparator.nativeProgress());
-        done.putExtra(EXTRA_STATUS,NativeSeparator.nativeStatus());
-        done.putExtra(EXTRA_OUTPUT,output);
-        sendBroadcast(done);
+        String nativeStatus = NativeSeparator.nativeStatus();
+        java.io.File mix = new java.io.File(output, "mix.wav");
+        if (success[0] && mix.exists() && mix.length() > 44) {
+            Intent done=new Intent(ACTION_DONE);
+            done.putExtra(EXTRA_PROGRESS,1.0f);
+            done.putExtra(EXTRA_STATUS,"done");
+            done.putExtra(EXTRA_OUTPUT,output);
+            sendBroadcast(done);
+        } else {
+            Intent failed=new Intent(ACTION_PROGRESS);
+            failed.putExtra(EXTRA_PROGRESS,NativeSeparator.nativeProgress());
+            failed.putExtra(EXTRA_STATUS, nativeStatus == null ? "native_error" : nativeStatus);
+            sendBroadcast(failed);
+        }
 
         try { ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).cancel(77); } catch(Exception ignored) {}
     }
