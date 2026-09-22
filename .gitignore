@@ -1,0 +1,1 @@
+*.iml\n.gradle/\n/local.properties\n/.idea/\nbuild/\n/captures/\napp/build/\n
