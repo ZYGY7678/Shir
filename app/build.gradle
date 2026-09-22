@@ -1,1 +1,49 @@
-apply plugin: 'com.android.application'\n\nandroid {\n    compileSdkVersion 35\n    defaultConfig {\n        applicationId 'com.shir.stems'\n        minSdkVersion 19\n        targetSdkVersion 19\n        versionCode 1\n        versionName '0.1.0'\n    }\n    buildTypes {\n        release { minifyEnabled false }\n    }\n    lintOptions { abortOnError false }\n}\n
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 30
+
+    defaultConfig {
+        applicationId 'com.shir.stems'
+        minSdkVersion 19
+        targetSdkVersion 19
+        versionCode 2
+        versionName '0.2.0'
+        ndkVersion '21.4.7075529'
+
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -O3"
+                arguments "-DANDROID_PLATFORM=android-19"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.18.1"
+        }
+    }
+
+    defaultConfig {
+        ndk {
+            abiFilters 'armeabi-v7a', 'x86'
+        }
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
