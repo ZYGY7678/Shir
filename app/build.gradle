@@ -1,0 +1,1 @@
+apply plugin: 'com.android.application'\n\nandroid {\n    compileSdkVersion 35\n    defaultConfig {\n        applicationId 'com.shir.stems'\n        minSdkVersion 19\n        targetSdkVersion 19\n        versionCode 1\n        versionName '0.1.0'\n    }\n    buildTypes {\n        release { minifyEnabled false }\n    }\n    lintOptions { abortOnError false }\n}\n
