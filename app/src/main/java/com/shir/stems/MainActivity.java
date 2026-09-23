@@ -29,6 +29,8 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Locale;
+import java.util.HashSet;
+import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final int PICK_AUDIO=41;
@@ -53,6 +55,8 @@ public class MainActivity extends Activity {
     private int focusIndex=0;
     private boolean prepared=false;
     private long startedAt=0;
+    private static final Set<String> SUPPORTED_EXTS = new HashSet<String>();
+    static { SUPPORTED_EXTS.add("mp3"); SUPPORTED_EXTS.add("wav"); SUPPORTED_EXTS.add("wave"); SUPPORTED_EXTS.add("ogg"); SUPPORTED_EXTS.add("opus"); SUPPORTED_EXTS.add("flac"); SUPPORTED_EXTS.add("wv"); SUPPORTED_EXTS.add("mpc"); SUPPORTED_EXTS.add("mpp"); }
 
     private final BroadcastReceiver receiver=new BroadcastReceiver(){
         @Override public void onReceive(Context c,Intent i){
@@ -241,8 +245,16 @@ public class MainActivity extends Activity {
         super.onActivityResult(r,result,data);
         if(r==PICK_AUDIO && result==RESULT_OK && data!=null && data.getData()!=null){
             try{
-                Uri u=data.getData(); inputPath=copyUriToCache(u);
-                song.setText(u.getLastPathSegment()==null?"קובץ נבחר":u.getLastPathSegment());
+                Uri u=data.getData();
+                String selectedName = u.getLastPathSegment()==null ? "קובץ נבחר" : u.getLastPathSegment();
+                String ext = extensionOf(selectedName);
+                if(!SUPPORTED_EXTS.contains(ext)){
+                    status.setText("פורמט לא נתמך להפרדה: "+(ext.length()==0?"לא ידוע":ext.toUpperCase(Locale.US)));
+                    Toast.makeText(this,"SHIR תומך ב‑MP3, WAV, OGG/OPUS, FLAC, WV ו‑MPC. AAC/M4A אינם נתמכים במנוע האופליין.",Toast.LENGTH_LONG).show();
+                    return;
+                }
+                inputPath=copyUriToCache(u);
+                song.setText(selectedName);
                 status.setText("מוכן • אפשר לנגן או להפריד");
                 playAll.setEnabled(true); separate.setEnabled(true);
                 prepareInputPlayer();
@@ -266,20 +278,31 @@ public class MainActivity extends Activity {
         String name=null;
         try{ name=uri.getLastPathSegment(); }catch(Exception ignored){}
         if(name!=null){
-            int dot=name.lastIndexOf('.');
-            if(dot>=0 && dot<name.length()-1){
-                String candidate=name.substring(dot+1).toLowerCase(Locale.US);
-                if(candidate.matches("mp3|m4a|wav|ogg|flac|aac|amr|3gp")) ext=candidate;
-            }
+            String candidate=extensionOf(name);
+            if(SUPPORTED_EXTS.contains(candidate)) ext=candidate;
         }
+        if(!SUPPORTED_EXTS.contains(ext)) throw new Exception("פורמט שמע אינו נתמך במנוע האופליין");
         File out=new File(dir,"input_"+System.currentTimeMillis()+"."+ext);
         InputStream in=getContentResolver().openInputStream(uri);
         if(in==null)throw new Exception("לא ניתן לפתוח את קובץ השיר");
-        FileOutputStream fos=new FileOutputStream(out);
-        byte[] buf=new byte[64*1024]; int n; while((n=in.read(buf))!=-1)fos.write(buf,0,n);
-        in.close(); fos.close();
-        if(!out.exists() || out.length()<44)throw new Exception("קובץ השיר ריק או פגום");
+        FileOutputStream fos=null;
+        try{
+            fos=new FileOutputStream(out);
+            byte[] buf=new byte[64*1024]; int n; while((n=in.read(buf))!=-1)fos.write(buf,0,n);
+            fos.flush();
+        } finally {
+            try{in.close();}catch(Exception ignored){}
+            try{if(fos!=null)fos.close();}catch(Exception ignored){}
+        }
+        if(!out.exists() || out.length()<44) { try{out.delete();}catch(Exception ignored){} throw new Exception("קובץ השיר ריק או פגום"); }
         return out.getAbsolutePath();
+    }
+
+    private String extensionOf(String name){
+        if(name==null)return "";
+        int dot=name.lastIndexOf('.');
+        if(dot<0 || dot==name.length()-1)return "";
+        return name.substring(dot+1).toLowerCase(Locale.US);
     }
 
     private String ensureModel()throws Exception{
@@ -293,6 +316,11 @@ public class MainActivity extends Activity {
 
     private void startSeparation(){
         if(inputPath==null)return;
+        String ext=extensionOf(inputPath);
+        if(!SUPPORTED_EXTS.contains(ext)){
+            status.setText("פורמט הקלט אינו נתמך.");
+            return;
+        }
         try{
             final String model=ensureModel();
             outputPath=new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),"SHIR/"+System.currentTimeMillis()).getAbsolutePath();
@@ -318,6 +346,11 @@ public class MainActivity extends Activity {
         if("decode_error".equals(s))return "לא ניתן לקרוא את קובץ השיר.";
         if("write_error".equals(s))return "לא ניתן לשמור את הערוצים.";
         if("native_error".equals(s))return "שגיאה במנוע ההפרדה.";
+        if("unsupported_format".equals(s))return "פורמט שמע זה אינו נתמך.";
+        if("input_too_long".equals(s))return "השיר ארוך מדי למכשיר הזה.";
+        if("out_of_memory".equals(s))return "אין מספיק זיכרון להפרדה.";
+        if("invalid_audio".equals(s))return "קובץ השמע פגום או לא תקין.";
+        if(s!=null && s.startsWith("מנוע:"))return s;
         return "מעבד… "+String.format(Locale.US,"%.1f%%",p*100);
     }
 
