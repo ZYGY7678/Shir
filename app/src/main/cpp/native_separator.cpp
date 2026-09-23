@@ -200,7 +200,9 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
 
         long keep = (offset+len<total) ? std::min(overlap,len) : 0;
         long flush = len-keep;
-        for(int s=0;s<4;++s) append_wav_frames(files[s],current[s],0,flush);
+        long flushFrom = (pendingLen > 0) ? blend : 0;
+        if (pendingLen > 0) flushFrom = blend;
+        for(int s=0;s<4;++s) append_wav_frames(files[s],current[s],flushFrom,flush);
         if(keep>0) {
             pendingLen=keep;
             for(int s=0;s<4;++s) pending[s]=current[s].rightCols(keep);
