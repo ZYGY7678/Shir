@@ -90,6 +90,11 @@ static Eigen::MatrixXf resample_audio(const Eigen::MatrixXf& in, int sampleRate)
     return out;
 }
 
+static void cleanup_outputs(const std::string& outDir) {
+    const char* names[]={"drums.wav","bass.wav","other.wav","vocals.wav","instrumental.wav","mix.wav"};
+    for(size_t i=0;i<sizeof(names)/sizeof(names[0]);++i) std::remove((outDir+"/"+names[i]).c_str());
+}
+
 static bool write_wave(const Eigen::MatrixXf& wav, const std::string& path) {
     std::shared_ptr<nqr::AudioData> data(new nqr::AudioData());
     data->sampleRate = demucscpp::SUPPORTED_SAMPLE_RATE;
