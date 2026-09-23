@@ -175,9 +175,17 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
         return false;
     }
 
-    const long chunk = (long)(20.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
-    const long overlap = (long)(1.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
-    const long stride = chunk - overlap;
+    // The upstream demucs.cpp inference already splits inputs into ~5.85 s
+    // strides internally (7.8 s segment with 25% overlap). Feeding it our old
+    // 20 s outer chunks caused nested splitting and repeated expensive model
+    // inference. On weak Android CPUs this could multiply the work.
+    //
+    // Use one internal stride per native call. demucs_inference will pad this
+    // short chunk to its model segment and run exactly one model inference.
+    // This keeps RAM low and avoids the nested-overlap slowdown.
+    const long chunk = (long)(5.8 * demucscpp::SUPPORTED_SAMPLE_RATE);
+    const long overlap = 0;
+    const long stride = chunk;
     const uint32_t outFrames = (uint32_t)total;
 
     std::ofstream files[6];
