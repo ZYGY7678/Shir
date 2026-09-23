@@ -1,1 +1,2 @@
 The release build downloads the pinned HT-Demucs 4-source GGML model into this directory before packaging the APK.
+\n\nSHIR uses Demucs v3 hdemucs_mmi for weak-CPU speed mode. Model SHA-256: f72a3b8ecce3aa50da9e062a91c46367e15b5f5a71d070874217c5e4cb6b35a4.\n
