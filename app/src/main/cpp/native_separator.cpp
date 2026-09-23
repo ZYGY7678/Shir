@@ -48,12 +48,17 @@ static void set_status(const std::string& s) {
 static bool ensure_model_loaded(const std::string& modelPath) {
     std::lock_guard<std::mutex> lock(g_model_mutex);
     if (g_model) return true;
+    set_status("טוען את מודל ההפרדה…");
+    g_progress.store(0.01f);
     std::unique_ptr<demucscpp::demucs_model> candidate(new demucscpp::demucs_model());
+    LOGI("Starting model load");
     if (!demucscpp::load_demucs_model(modelPath, candidate.get())) {
         LOGE("Model load failed: %s", modelPath.c_str());
         return false;
     }
     g_model = std::move(candidate);
+    g_progress.store(0.05f);
+    set_status("מודל נטען — מתחיל לקרוא את השיר…");
     return true;
 }
 
@@ -277,7 +282,8 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
         if(input.empty() || modelPath.empty() || outDir.empty()) { set_status("קלט לא תקין"); g_running=0; return JNI_FALSE; }
         if(!ensure_model_loaded(modelPath)) { set_status("model_error"); g_running=0; return JNI_FALSE; }
 
-        set_status("decoding");
+        g_progress.store(std::max(g_progress.load(), 0.06f));
+        set_status("קורא את קובץ השיר…");
         nqr::AudioData audioData;
         nqr::NyquistIO loader;
         loader.Load(&audioData,input);
@@ -285,7 +291,8 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
             set_status("decode_error"); g_running=0; return JNI_FALSE;
         }
 
-        set_status("separating");
+        g_progress.store(0.10f);
+        set_status("מתחיל הפרדת ערוצים…");
         bool ok=separate_chunked(input,outDir,audioData,*g_model);
         if(!ok) { set_status("write_error"); g_running=0; return JNI_FALSE; }
         g_progress.store(1.0f);
