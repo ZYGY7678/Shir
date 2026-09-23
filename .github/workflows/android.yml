@@ -77,15 +77,15 @@ jobs:
               png(os.path.join(p,'ic_launcher.png'),n)
           PY
 
-      - name: Download pinned HT-Demucs 4-source model
+      - name: Download pinned fast Demucs v3 4-source model
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p app/src/main/assets
-          url="https://huggingface.co/ogbabydiesal/demucs-ggml/resolve/main/ggml-htdemucs-4s-f16.bin?download=true"
-          out="app/src/main/assets/ggml-htdemucs-4s-f16.bin"
+          url="https://huggingface.co/datasets/Retrobear/demucs.cpp/resolve/main/ggml-model-hdemucs_mmi-v3-f16.bin?download=true"
+          out="app/src/main/assets/ggml-hdemucs-mmi-v3-f16.bin"
           curl -L --fail --retry 3 --retry-delay 2 "$url" -o "$out"
-          echo "72b17c42d308982ddb5069bc3bf48b81a5aac4cb6516e4366c0fa7cef6df0064  $out" | sha256sum -c -
+          echo "f72a3b8ecce3aa50da9e062a91c46367e15b5f5a71d070874217c5e4cb6b35a4  $out" | sha256sum -c -
 
       - name: Switch to Java 11 for Gradle 6.7.1
         uses: actions/setup-java@v5
@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           apk="app/build/outputs/apk/debug/app-debug.apk"
           test -f "$apk"
-          unzip -l "$apk" | grep -E "lib/(armeabi-v7a|x86)/libshir-native.so|assets/ggml-htdemucs-4s-f16.bin"
+          unzip -l "$apk" | grep -E "lib/(armeabi-v7a|x86)/libshir-native.so|assets/ggml-hdemucs-mmi-v3-f16.bin"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
