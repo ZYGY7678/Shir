@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <new>
+#include <cctype>
 
 #include "model.hpp"
 #include "dsp.hpp"
@@ -31,6 +33,17 @@ static std::atomic<float> g_progress(0.0f);
 static std::atomic<int> g_running(0);
 static std::mutex g_status_mutex;
 static std::string g_status = "idle";
+
+static bool supported_extension(const std::string& path) {
+    size_t slash = path.find_last_of("/\\");
+    std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    size_t dot = name.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= name.size()) return false;
+    std::string ext = name.substr(dot + 1);
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c){ return (char)std::tolower(c); });
+    return ext=="mp3" || ext=="wav" || ext=="wave" || ext=="ogg" || ext=="opus" ||
+           ext=="flac" || ext=="wv" || ext=="mpc" || ext=="mpp";
+}
 
 static std::string base_name(const std::string& path) {
     size_t slash = path.find_last_of("/\\");
@@ -151,6 +164,11 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
     audio = resample_audio(audio, audioData.sampleRate);
     const long total = audio.cols();
     if (total <= 0) return false;
+    const long maxFrames = (long)(12.0 * 60.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
+    if (total > maxFrames) {
+        set_status("input_too_long");
+        return false;
+    }
 
     const long chunk = (long)(20.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
     const long overlap = (long)(1.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
@@ -176,9 +194,9 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
         Eigen::MatrixXf part=audio.block(0,offset,2,len);
         demucscpp::ProgressCallback cb=[&](float p,const std::string& msg) {
             float global=((float)chunkIndex + std::max(0.0f,std::min(1.0f,p)))/(float)totalChunks;
-            g_progress.store(std::min(0.98f,global));
+            g_progress.store(std::min(0.98f,0.10f + global*0.88f));
             std::lock_guard<std::mutex> lock(g_status_mutex);
-            g_status="הפרדה: "+std::to_string((int)(global*100.0f))+"%";
+            g_status="הפרדה: "+std::to_string((int)((0.10f + global*0.88f)*100.0f))+"%";
             LOGI("%s",msg.c_str());
         };
         Eigen::Tensor3dXf out=demucscpp::demucs_inference(model,part,cb);
@@ -280,13 +298,26 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
 
     try {
         if(input.empty() || modelPath.empty() || outDir.empty()) { set_status("קלט לא תקין"); g_running=0; return JNI_FALSE; }
+        if(!supported_extension(input)) { set_status("unsupported_format"); g_running=0; return JNI_FALSE; }
         if(!ensure_model_loaded(modelPath)) { set_status("model_error"); g_running=0; return JNI_FALSE; }
 
         g_progress.store(std::max(g_progress.load(), 0.06f));
         set_status("קורא את קובץ השיר…");
         nqr::AudioData audioData;
         nqr::NyquistIO loader;
-        loader.Load(&audioData,input);
+        try {
+            loader.Load(&audioData,input);
+        } catch (const std::bad_alloc&) {
+        LOGE("out of memory");
+        set_status("out_of_memory");
+        g_running=0;
+        return JNI_FALSE;
+    } catch (const std::exception& e) {
+            LOGE("decoder exception: %s",e.what());
+            set_status("decode_error");
+            g_running=0;
+            return JNI_FALSE;
+        }
         if(audioData.samples.empty() || audioData.channelCount<1 || audioData.sampleRate<=0) {
             set_status("decode_error"); g_running=0; return JNI_FALSE;
         }
