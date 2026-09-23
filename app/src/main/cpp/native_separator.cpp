@@ -105,6 +105,154 @@ static Eigen::MatrixXf sum_sources(const Eigen::Tensor3dXf& out, const std::vect
     return w;
 }
 
+static void write_u16(std::ofstream& f, uint16_t v) {
+    char b[2] = {(char)(v & 255), (char)((v >> 8) & 255)};
+    f.write(b, 2);
+}
+static void write_u32(std::ofstream& f, uint32_t v) {
+    char b[4] = {(char)(v & 255), (char)((v >> 8) & 255), (char)((v >> 16) & 255), (char)((v >> 24) & 255)};
+    f.write(b, 4);
+}
+static void write_wav_header(std::ofstream& f, uint32_t frames, uint32_t sampleRate) {
+    f.write("RIFF",4); write_u32(f,36u + frames * 4u); f.write("WAVE",4);
+    f.write("fmt ",4); write_u32(f,16); write_u16(f,1); write_u16(f,2);
+    write_u32(f,sampleRate); write_u32(f,sampleRate*4u); write_u16(f,4); write_u16(f,16);
+    f.write("data",4); write_u32(f,frames*4u);
+}
+static int16_t pcm16(float v) {
+    if (!std::isfinite(v)) v = 0.0f;
+    v = std::max(-0.999969f, std::min(0.999969f, v));
+    return (int16_t)std::lrintf(v * 32767.0f);
+}
+static bool append_wav_frames(std::ofstream& f, const Eigen::MatrixXf& w, long from, long count) {
+    if (!f.good()) return false;
+    for (long i=0;i<count;++i) {
+        write_u16(f,(uint16_t)pcm16(w(0,from+i)));
+        write_u16(f,(uint16_t)pcm16(w(1,from+i)));
+    }
+    return f.good();
+}
+
+static bool separate_chunked(const std::string& input, const std::string& outDir,
+                             const nqr::AudioData& audioData, demucscpp::demucs_model& model) {
+    const size_t srcN = audioData.samples.size() / audioData.channelCount;
+    Eigen::MatrixXf audio(2, (long)srcN);
+    for (size_t i=0;i<srcN;++i) {
+        float l=audioData.samples[i*audioData.channelCount];
+        float r=audioData.channelCount>1 ? audioData.samples[i*audioData.channelCount+1] : l;
+        audio(0,(long)i)=l; audio(1,(long)i)=r;
+    }
+    audio = resample_audio(audio, audioData.sampleRate);
+    const long total = audio.cols();
+    if (total <= 0) return false;
+
+    const long chunk = (long)(20.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
+    const long overlap = (long)(1.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
+    const long stride = chunk - overlap;
+    const uint32_t outFrames = (uint32_t)total;
+
+    std::ofstream files[6];
+    const char* names[6]={"drums.wav","bass.wav","other.wav","vocals.wav","instrumental.wav","mix.wav"};
+    for(int i=0;i<6;++i) {
+        files[i].open(outDir+"/"+names[i],std::ios::binary|std::ios::trunc);
+        if(!files[i].is_open()) return false;
+        write_wav_header(files[i],outFrames,(uint32_t)demucscpp::SUPPORTED_SAMPLE_RATE);
+    }
+
+    std::vector<Eigen::MatrixXf> pending(4);
+    long pendingLen=0;
+    long offset=0;
+    int chunkIndex=0;
+    const int totalChunks=(int)((total+stride-1)/stride);
+
+    while(offset<total) {
+        long len=std::min(chunk,total-offset);
+        Eigen::MatrixXf part=audio.block(0,offset,2,len);
+        demucscpp::ProgressCallback cb=[&](float p,const std::string& msg) {
+            float global=((float)chunkIndex + std::max(0.0f,std::min(1.0f,p)))/(float)totalChunks;
+            g_progress.store(std::min(0.98f,global));
+            std::lock_guard<std::mutex> lock(g_status_mutex);
+            g_status="הפרדה: "+std::to_string((int)(global*100.0f))+"%";
+            LOGI("%s",msg.c_str());
+        };
+        Eigen::Tensor3dXf out=demucscpp::demucs_inference(model,part,cb);
+
+        std::vector<Eigen::MatrixXf> current(4);
+        for(int s=0;s<4;++s) current[s]=source_matrix(out,s,len);
+
+        long blend=std::min(overlap,std::min(pendingLen,len));
+        if(pendingLen>0) {
+            Eigen::MatrixXf merged(2,blend);
+            for(int s=0;s<4;++s) {
+                for(long i=0;i<blend;++i) {
+                    float a=(float)(blend-i)/(float)(blend+1);
+                    current[s](0,i)=pending[s](0,pendingLen-blend+i)*a + current[s](0,i)*(1.0f-a);
+                    current[s](1,i)=pending[s](1,pendingLen-blend+i)*a + current[s](1,i)*(1.0f-a);
+                }
+            }
+            for(int s=0;s<4;++s) {
+                Eigen::MatrixXf full(2,blend);
+                full=current[s].leftCols(blend);
+                append_wav_frames(files[s],full,0,blend);
+            }
+            pendingLen=0;
+        }
+
+        long keep = (offset+len<total) ? std::min(overlap,len) : 0;
+        long flush = len-keep;
+        for(int s=0;s<4;++s) append_wav_frames(files[s],current[s],0,flush);
+        if(keep>0) {
+            pendingLen=keep;
+            for(int s=0;s<4;++s) pending[s]=current[s].rightCols(keep);
+        } else {
+            pendingLen=0;
+        }
+        ++chunkIndex;
+        offset += stride;
+    }
+
+    if(pendingLen>0) {
+        for(int s=0;s<4;++s) append_wav_frames(files[s],pending[s],0,pendingLen);
+    }
+
+    files[4].flush(); files[5].flush();
+    for(int i=0;i<4;++i) {
+        files[i].close();
+    }
+    for(int i=0;i<4;++i) {
+        std::ifstream in(outDir+"/"+names[i],std::ios::binary|std::ios::ate);
+        if(!in.good()) return false;
+        in.close();
+    }
+
+    // Build instrumental and mix from the four already-created PCM WAVs.
+    // This pass is streaming, so it does not allocate the whole song.
+    std::ifstream ins[4];
+    for(int i=0;i<4;++i) { ins[i].open(outDir+"/"+names[i],std::ios::binary); if(!ins[i]) return false; ins[i].seekg(44); }
+    const long blockFrames=8192;
+    std::vector<int16_t> b[4];
+    for(int i=0;i<4;++i) b[i].resize(blockFrames*2);
+    while(true) {
+        std::streamsize got=ins[0].read((char*)b[0].data(),b[0].size()*sizeof(int16_t)).gcount();
+        if(got<=0) break;
+        long samples=(long)got/(long)sizeof(int16_t);
+        for(int i=1;i<4;++i) ins[i].read((char*)b[i].data(),samples*sizeof(int16_t));
+        for(long k=0;k<samples;k+=2) {
+            float instL=((int)b[0][k]+(int)b[1][k]+(int)b[2][k])/32767.0f;
+            float instR=((int)b[0][k+1]+(int)b[1][k+1]+(int)b[2][k+1])/32767.0f;
+            float mixL=instL+b[3][k]/32767.0f;
+            float mixR=instR+b[3][k+1]/32767.0f;
+            write_u16(files[4],(uint16_t)pcm16(instL));
+            write_u16(files[4],(uint16_t)pcm16(instR));
+            write_u16(files[5],(uint16_t)pcm16(mixL));
+            write_u16(files[5],(uint16_t)pcm16(mixR));
+        }
+    }
+    for(int i=0;i<4;++i) ins[i].close();
+    files[4].close(); files[5].close();
+    return true;
+}
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_shir_stems_NativeSeparator_nativeSeparate(
         JNIEnv* env, jclass, jstring jInput, jstring jModel, jstring jOutput) {
@@ -114,84 +262,42 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
     g_progress.store(0.0f);
     set_status("loading");
 
-    const char* inputC = env->GetStringUTFChars(jInput, nullptr);
-    const char* modelC = env->GetStringUTFChars(jModel, nullptr);
-    const char* outputC = env->GetStringUTFChars(jOutput, nullptr);
-    std::string input(inputC ? inputC : "");
-    std::string modelPath(modelC ? modelC : "");
-    std::string outDir(outputC ? outputC : "");
-    env->ReleaseStringUTFChars(jInput, inputC);
-    env->ReleaseStringUTFChars(jModel, modelC);
-    env->ReleaseStringUTFChars(jOutput, outputC);
+    const char* inputC=env->GetStringUTFChars(jInput,nullptr);
+    const char* modelC=env->GetStringUTFChars(jModel,nullptr);
+    const char* outputC=env->GetStringUTFChars(jOutput,nullptr);
+    std::string input(inputC?inputC:""), modelPath(modelC?modelC:""), outDir(outputC?outputC:"");
+    env->ReleaseStringUTFChars(jInput,inputC);
+    env->ReleaseStringUTFChars(jModel,modelC);
+    env->ReleaseStringUTFChars(jOutput,outputC);
 
     try {
-        if (!ensure_model_loaded(modelPath)) {
-            set_status("model_error");
-            g_running = 0;
-            return JNI_FALSE;
-        }
+        if(input.empty() || modelPath.empty() || outDir.empty()) { set_status("קלט לא תקין"); g_running=0; return JNI_FALSE; }
+        if(!ensure_model_loaded(modelPath)) { set_status("model_error"); g_running=0; return JNI_FALSE; }
 
         set_status("decoding");
         nqr::AudioData audioData;
         nqr::NyquistIO loader;
-        loader.Load(&audioData, input);
-
-        if (audioData.samples.empty() || audioData.channelCount < 1 || audioData.sampleRate <= 0) {
-            set_status("decode_error");
-            g_running = 0;
-            return JNI_FALSE;
+        loader.Load(&audioData,input);
+        if(audioData.samples.empty() || audioData.channelCount<1 || audioData.sampleRate<=0) {
+            set_status("decode_error"); g_running=0; return JNI_FALSE;
         }
-
-        const size_t srcN = audioData.samples.size() / audioData.channelCount;
-        Eigen::MatrixXf audio(2, (long)srcN);
-        for (size_t i = 0; i < srcN; ++i) {
-            float left = audioData.samples[i * audioData.channelCount];
-            float right = audioData.channelCount > 1 ? audioData.samples[i * audioData.channelCount + 1] : left;
-            audio(0, (long)i) = left;
-            audio(1, (long)i) = right;
-        }
-
-        set_status("resampling");
-        audio = resample_audio(audio, audioData.sampleRate);
 
         set_status("separating");
-        demucscpp::ProgressCallback cb = [](float p, const std::string& message) {
-            g_progress.store(std::max(0.0f, std::min(0.99f, p)));
-            { std::lock_guard<std::mutex> lock(g_status_mutex); g_status = message; }
-        };
-
-        Eigen::Tensor3dXf stems = demucscpp::demucs_inference(*g_model, audio, cb);
-        const long n = audio.cols();
-
-        std::string stemNames[4] = {"drums", "bass", "other", "vocals"};
-        for (int s = 0; s < 4; ++s) {
-            std::string file = outDir + "/" + stemNames[s] + ".wav";
-            if (!write_wave(source_matrix(stems, s, n), file)) {
-                set_status("write_error");
-                g_running = 0;
-                return JNI_FALSE;
-            }
-            g_progress.store(0.78f + 0.05f * s);
-        }
-
-        if (!write_wave(sum_sources(stems, {0,1,2}, n), outDir + "/instrumental.wav")) {
-            set_status("write_error");
-            g_running = 0;
-            return JNI_FALSE;
-        }
-        if (!write_wave(sum_sources(stems, {0,1,2,3}, n), outDir + "/mix.wav")) {
-            set_status("write_error");
-            g_running = 0;
-            return JNI_FALSE;
-        }
-
+        bool ok=separate_chunked(input,outDir,audioData,*g_model);
+        if(!ok) { set_status("write_error"); g_running=0; return JNI_FALSE; }
         g_progress.store(1.0f);
         set_status("done");
-        g_running = 0;
+        g_running=0;
         return JNI_TRUE;
+    } catch (const std::exception& e) {
+        LOGE("native exception: %s",e.what());
+        set_status(std::string("מנוע: ")+e.what());
+        g_running=0;
+        return JNI_FALSE;
     } catch (...) {
-        set_status("native_error");
-        g_running = 0;
+        LOGE("native unknown exception");
+        set_status("מנוע: חריגה לא ידועה");
+        g_running=0;
         return JNI_FALSE;
     }
 }
