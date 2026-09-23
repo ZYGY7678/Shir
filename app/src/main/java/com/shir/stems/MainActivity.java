@@ -254,10 +254,32 @@ public class MainActivity extends Activity {
 
     private String copyUriToCache(Uri uri)throws Exception{
         File dir=new File(getCacheDir(),"inputs"); dir.mkdirs();
-        File out=new File(dir,"input_"+System.currentTimeMillis()+".audio");
-        InputStream in=getContentResolver().openInputStream(uri); FileOutputStream fos=new FileOutputStream(out);
+        String ext="wav";
+        String mime=getContentResolver().getType(uri);
+        if(mime!=null){
+            if(mime.equals("audio/mpeg")||mime.equals("audio/mp3")) ext="mp3";
+            else if(mime.equals("audio/mp4")||mime.equals("audio/x-m4a")) ext="m4a";
+            else if(mime.equals("audio/ogg")) ext="ogg";
+            else if(mime.equals("audio/flac")) ext="flac";
+            else if(mime.equals("audio/wav")||mime.equals("audio/x-wav")) ext="wav";
+        }
+        String name=null;
+        try{ name=uri.getLastPathSegment(); }catch(Exception ignored){}
+        if(name!=null){
+            int dot=name.lastIndexOf('.');
+            if(dot>=0 && dot<name.length()-1){
+                String candidate=name.substring(dot+1).toLowerCase(Locale.US);
+                if(candidate.matches("mp3|m4a|wav|ogg|flac|aac|amr|3gp")) ext=candidate;
+            }
+        }
+        File out=new File(dir,"input_"+System.currentTimeMillis()+"."+ext);
+        InputStream in=getContentResolver().openInputStream(uri);
+        if(in==null)throw new Exception("לא ניתן לפתוח את קובץ השיר");
+        FileOutputStream fos=new FileOutputStream(out);
         byte[] buf=new byte[64*1024]; int n; while((n=in.read(buf))!=-1)fos.write(buf,0,n);
-        in.close(); fos.close(); return out.getAbsolutePath();
+        in.close(); fos.close();
+        if(!out.exists() || out.length()<44)throw new Exception("קובץ השיר ריק או פגום");
+        return out.getAbsolutePath();
     }
 
     private String ensureModel()throws Exception{
