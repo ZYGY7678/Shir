@@ -8,7 +8,6 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(DEMUCS_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/demucs.cpp)
 set(NYQUIST_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party/libnyquist)
 
-# Build libnyquist with its complete bundled decoder sources.
 set(LIBNYQUIST_BUILD_EXAMPLE OFF CACHE BOOL "Disable libnyquist example" FORCE)
 add_subdirectory("${NYQUIST_ROOT}" "${CMAKE_BINARY_DIR}/libnyquist" EXCLUDE_FROM_ALL)
 
@@ -28,18 +27,26 @@ target_include_directories(shir-native PRIVATE
     "${NYQUIST_ROOT}/include"
 )
 
+# Keep inference single-threaded to avoid oversubscription on weak phones,
+# but keep Eigen SIMD enabled. The old DONT_VECTORIZE flag forced scalar math.
 target_compile_definitions(shir-native PRIVATE
     EIGEN_DONT_PARALLELIZE
-    EIGEN_DONT_VECTORIZE
 )
 
 target_compile_options(shir-native PRIVATE
     -O3
     -ffast-math
+    -fomit-frame-pointer
     -fvisibility=hidden
     -fexceptions
     -frtti
 )
+
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_options(shir-native PRIVATE -march=armv7-a -mfpu=neon -mfloat-abi=softfp)
+elseif(ANDROID_ABI STREQUAL "x86")
+    target_compile_options(shir-native PRIVATE -msse2 -mfpmath=sse)
+endif()
 
 find_library(log-lib log)
 target_link_libraries(shir-native
