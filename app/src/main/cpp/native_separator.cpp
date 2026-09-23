@@ -26,7 +26,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-static std::unique_ptr<demucscpp::demucs_model> g_model;
+static std::unique_ptr<demucscpp_v3::demucs_v3_model> g_model;
 static std::mutex g_model_mutex;
 static std::mutex g_run_mutex;
 static std::atomic<float> g_progress(0.0f);
@@ -63,15 +63,15 @@ static bool ensure_model_loaded(const std::string& modelPath) {
     if (g_model) return true;
     set_status("טוען את מודל ההפרדה…");
     g_progress.store(0.01f);
-    std::unique_ptr<demucscpp::demucs_model> candidate(new demucscpp::demucs_model());
+    std::unique_ptr<demucscpp_v3::demucs_v3_model> candidate(new demucscpp_v3::demucs_v3_model());
     LOGI("Starting model load");
-    if (!demucscpp::load_demucs_model(modelPath, candidate.get())) {
+    if (!demucscpp_v3::load_demucs_v3_model(modelPath, candidate.get())) {
         LOGE("Model load failed: %s", modelPath.c_str());
         return false;
     }
     g_model = std::move(candidate);
     g_progress.store(0.05f);
-    set_status("מודל נטען — מתחיל לקרוא את השיר…");
+    set_status("מודל מהיר נטען — מתחיל לקרוא את השיר…");
     return true;
 }
 
@@ -158,7 +158,8 @@ static bool append_wav_frames(std::ofstream& f, const Eigen::MatrixXf& w, long f
 }
 
 static bool separate_chunked(const std::string& input, const std::string& outDir,
-                             const nqr::AudioData& audioData, demucscpp::demucs_model& model) {
+                             const nqr::AudioData& audioData, demucscpp_v3::demucs_v3_model& model) {
+    (void)input;
     const size_t srcN = audioData.samples.size() / audioData.channelCount;
     Eigen::MatrixXf audio(2, (long)srcN);
     for (size_t i=0;i<srcN;++i) {
@@ -166,28 +167,20 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
         float r=audioData.channelCount>1 ? audioData.samples[i*audioData.channelCount+1] : l;
         audio(0,(long)i)=l; audio(1,(long)i)=r;
     }
+
     audio = resample_audio(audio, audioData.sampleRate);
     const long total = audio.cols();
     if (total <= 0) return false;
+
+    // Demucs v3 is substantially lighter than HT-Demucs v4 because it has
+    // no cross-transformer. Keep a conservative 12-minute limit for old phones.
     const long maxFrames = (long)(12.0 * 60.0 * demucscpp::SUPPORTED_SAMPLE_RATE);
     if (total > maxFrames) {
         set_status("input_too_long");
         return false;
     }
 
-    // The upstream demucs.cpp inference already splits inputs into ~5.85 s
-    // strides internally (7.8 s segment with 25% overlap). Feeding it our old
-    // 20 s outer chunks caused nested splitting and repeated expensive model
-    // inference. On weak Android CPUs this could multiply the work.
-    //
-    // Use one internal stride per native call. demucs_inference will pad this
-    // short chunk to its model segment and run exactly one model inference.
-    // This keeps RAM low and avoids the nested-overlap slowdown.
-    const long chunk = (long)(5.8 * demucscpp::SUPPORTED_SAMPLE_RATE);
-    const long overlap = 0;
-    const long stride = chunk;
     const uint32_t outFrames = (uint32_t)total;
-
     std::ofstream files[6];
     const char* names[6]={"drums.wav","bass.wav","other.wav","vocals.wav","instrumental.wav","mix.wav"};
     for(int i=0;i<6;++i) {
@@ -196,86 +189,63 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
         write_wav_header(files[i],outFrames,(uint32_t)demucscpp::SUPPORTED_SAMPLE_RATE);
     }
 
-    std::vector<Eigen::MatrixXf> pending(4);
-    long pendingLen=0;
-    long offset=0;
-    int chunkIndex=0;
-    const int totalChunks=(int)((total+stride-1)/stride);
+    // v3 already performs its own 7.8 s / 25% overlapped inference internally.
+    // A 15.6 s outer window keeps RAM bounded on very weak devices while
+    // avoiding the old 5.8 s nested-window setup.
+    const long chunk = (long)(15.6 * demucscpp::SUPPORTED_SAMPLE_RATE);
+    const long totalChunks=(long)((total+chunk-1)/chunk);
 
-    while(offset<total) {
-        long len=std::min(chunk,total-offset);
+    for(long chunkIndex=0, offset=0; offset<total; ++chunkIndex, offset+=chunk) {
+        const long len=std::min(chunk,total-offset);
         Eigen::MatrixXf part=audio.block(0,offset,2,len);
+
         demucscpp::ProgressCallback cb=[&](float p,const std::string& msg) {
-            float global=((float)chunkIndex + std::max(0.0f,std::min(1.0f,p)))/(float)totalChunks;
-            g_progress.store(std::min(0.98f,0.10f + global*0.88f));
-            std::lock_guard<std::mutex> lock(g_status_mutex);
-            g_status="הפרדה: "+std::to_string((int)((0.10f + global*0.88f)*100.0f))+"%";
+            float local=std::max(0.0f,std::min(1.0f,p));
+            float global=((float)chunkIndex + local)/(float)std::max(1L,totalChunks);
+            float progress=std::min(0.98f,0.10f + global*0.88f);
+            g_progress.store(progress);
+            {
+                std::lock_guard<std::mutex> lock(g_status_mutex);
+                g_status="הפרדה: "+std::to_string((int)(progress*100.0f))+"%";
+            }
             LOGI("%s",msg.c_str());
         };
-        Eigen::Tensor3dXf out=demucscpp::demucs_inference(model,part,cb);
 
-        std::vector<Eigen::MatrixXf> current(4);
-        for(int s=0;s<4;++s) current[s]=source_matrix(out,s,len);
+        Eigen::Tensor3dXf out=demucscpp_v3::demucs_v3_inference(model,part,cb);
+        if(out.dimension(0)!=4 || out.dimension(1)!=2 || out.dimension(2)<len) return false;
 
-        long blend=std::min(overlap,std::min(pendingLen,len));
-        bool hadPending = pendingLen > 0;
-        if(pendingLen>0) {
-            Eigen::MatrixXf merged(2,blend);
-            for(int s=0;s<4;++s) {
-                for(long i=0;i<blend;++i) {
-                    float a=(float)(blend-i)/(float)(blend+1);
-                    current[s](0,i)=pending[s](0,pendingLen-blend+i)*a + current[s](0,i)*(1.0f-a);
-                    current[s](1,i)=pending[s](1,pendingLen-blend+i)*a + current[s](1,i)*(1.0f-a);
-                }
+        for(int s=0;s<4;++s) {
+            Eigen::MatrixXf w(2,len);
+            for(long i=0;i<len;++i) {
+                w(0,i)=out(s,0,i);
+                w(1,i)=out(s,1,i);
             }
-            for(int s=0;s<4;++s) {
-                Eigen::MatrixXf full(2,blend);
-                full=current[s].leftCols(blend);
-                append_wav_frames(files[s],full,0,blend);
-            }
-            pendingLen=0;
+            if(!append_wav_frames(files[s],w,0,len)) return false;
         }
-
-        long keep = (offset+len<total) ? std::min(overlap,len) : 0;
-        long flush = len-keep;
-        long flushFrom = hadPending ? blend : 0;
-        for(int s=0;s<4;++s) append_wav_frames(files[s],current[s],flushFrom,flush);
-        if(keep>0) {
-            pendingLen=keep;
-            for(int s=0;s<4;++s) pending[s]=current[s].rightCols(keep);
-        } else {
-            pendingLen=0;
-        }
-        ++chunkIndex;
-        offset += stride;
     }
 
-    if(pendingLen>0) {
-        for(int s=0;s<4;++s) append_wav_frames(files[s],pending[s],0,pendingLen);
-    }
+    for(int i=0;i<4;++i) files[i].close();
 
-    files[4].flush(); files[5].flush();
-    for(int i=0;i<4;++i) {
-        files[i].close();
-    }
-    for(int i=0;i<4;++i) {
-        std::ifstream in(outDir+"/"+names[i],std::ios::binary|std::ios::ate);
-        if(!in.good()) return false;
-        in.close();
-    }
-
-    // Build instrumental and mix from the four already-created PCM WAVs.
-    // This pass is streaming, so it does not allocate the whole song.
+    // Build instrumental and mix in a streaming pass so weak phones do not
+    // need another full-song PCM allocation.
     std::ifstream ins[4];
-    for(int i=0;i<4;++i) { ins[i].open(outDir+"/"+names[i],std::ios::binary); if(!ins[i]) return false; ins[i].seekg(44); }
+    for(int i=0;i<4;++i) {
+        ins[i].open(outDir+"/"+names[i],std::ios::binary);
+        if(!ins[i]) return false;
+        ins[i].seekg(44);
+    }
+
     const long blockFrames=8192;
     std::vector<int16_t> b[4];
     for(int i=0;i<4;++i) b[i].resize(blockFrames*2);
+
     while(true) {
         std::streamsize got=ins[0].read((char*)b[0].data(),b[0].size()*sizeof(int16_t)).gcount();
         if(got<=0) break;
         long samples=(long)got/(long)sizeof(int16_t);
-        for(int i=1;i<4;++i) ins[i].read((char*)b[i].data(),samples*sizeof(int16_t));
+        for(int i=1;i<4;++i) {
+            if(!ins[i].read((char*)b[i].data(),samples*sizeof(int16_t))) return false;
+        }
         for(long k=0;k<samples;k+=2) {
             float instL=((int)b[0][k]+(int)b[1][k]+(int)b[2][k])/32767.0f;
             float instR=((int)b[0][k+1]+(int)b[1][k+1]+(int)b[2][k+1])/32767.0f;
@@ -288,7 +258,8 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
         }
     }
     for(int i=0;i<4;++i) ins[i].close();
-    files[4].close(); files[5].close();
+    files[4].close();
+    files[5].close();
     return true;
 }
 
@@ -336,7 +307,7 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
         }
 
         g_progress.store(0.10f);
-        set_status("מתחיל הפרדת ערוצים…");
+        set_status("מתחיל הפרדה מהירה למעבד חלש…");
         bool ok=false;
         try {
             ok=separate_chunked(input,outDir,audioData,*g_model);
