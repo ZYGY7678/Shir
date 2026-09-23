@@ -181,6 +181,7 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
         for(int s=0;s<4;++s) current[s]=source_matrix(out,s,len);
 
         long blend=std::min(overlap,std::min(pendingLen,len));
+        bool hadPending = pendingLen > 0;
         if(pendingLen>0) {
             Eigen::MatrixXf merged(2,blend);
             for(int s=0;s<4;++s) {
@@ -200,8 +201,7 @@ static bool separate_chunked(const std::string& input, const std::string& outDir
 
         long keep = (offset+len<total) ? std::min(overlap,len) : 0;
         long flush = len-keep;
-        long flushFrom = (pendingLen > 0) ? blend : 0;
-        if (pendingLen > 0) flushFrom = blend;
+        long flushFrom = hadPending ? blend : 0;
         for(int s=0;s<4;++s) append_wav_frames(files[s],current[s],flushFrom,flush);
         if(keep>0) {
             pendingLen=keep;
