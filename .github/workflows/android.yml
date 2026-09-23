@@ -44,6 +44,39 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-30" "build-tools;30.0.3" "cmake;3.18.1" "ndk;21.4.7075529"
 
+      - name: Generate SHIR launcher icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, struct, zlib
+          def png(path, n):
+              pix=bytearray()
+              c=(25,31,39,255); a=(102,252,241,255)
+              for y in range(n):
+                  pix.append(0)
+                  for x in range(n):
+                      dx=x-n/2; dy=y-n/2; inside=dx*dx+dy*dy <= (n*0.46)**2
+                      r,g,b,al=c if inside else (0,0,0,0)
+                      # musical note: stem + head + flag
+                      sx=n*0.60; top=n*0.27; stemw=n*0.055
+                      note=(abs(x-sx)<stemw and y>=top and y<n*0.70)
+                      head=((x-n*0.43)/(n*0.105))**2+((y-n*0.70)/(n*0.075))**2 <= 1
+                      flag=(y>=top and y<top+n*0.09 and x>=n*0.43 and x<=sx)
+                      if note or head or flag: r,g,b,al=a
+                      pix.extend((r,g,b,al))
+              raw=bytes(pix)
+              def chunk(t,d):
+                  return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
+              data=b'\\x89PNG\\r\\n\\x1a\\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',n,n,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw,9))+chunk(b'IEND',b'')
+              open(path,'wb').write(data)
+          sizes={'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}
+          for d,n in sizes.items():
+              p=f'app/src/main/res/mipmap-{d}'
+              os.makedirs(p,exist_ok=True)
+              png(os.path.join(p,'ic_launcher.png'),n)
+          PY
+
       - name: Download pinned HT-Demucs 4-source model
         shell: bash
         run: |
