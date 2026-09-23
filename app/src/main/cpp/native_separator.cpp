@@ -324,12 +324,33 @@ Java_com_shir_stems_NativeSeparator_nativeSeparate(
 
         g_progress.store(0.10f);
         set_status("מתחיל הפרדת ערוצים…");
-        bool ok=separate_chunked(input,outDir,audioData,*g_model);
-        if(!ok) { set_status("write_error"); g_running=0; return JNI_FALSE; }
+        bool ok=false;
+        try {
+            ok=separate_chunked(input,outDir,audioData,*g_model);
+        } catch (const std::bad_alloc&) {
+            cleanup_outputs(outDir);
+            set_status("out_of_memory");
+            g_running=0;
+            return JNI_FALSE;
+        }
+        if(!ok) {
+            cleanup_outputs(outDir);
+            std::string st;
+            { std::lock_guard<std::mutex> lock(g_status_mutex); st=g_status; }
+            if(st!="input_too_long" && st!="decode_error" && st!="unsupported_format" && st!="out_of_memory") set_status("write_error");
+            g_running=0;
+            return JNI_FALSE;
+        }
         g_progress.store(1.0f);
         set_status("done");
         g_running=0;
         return JNI_TRUE;
+    } catch (const std::bad_alloc&) {
+        LOGE("out of memory");
+        set_status("out_of_memory");
+        cleanup_outputs(outDir);
+        g_running=0;
+        return JNI_FALSE;
     } catch (const std::exception& e) {
         LOGE("native exception: %s",e.what());
         set_status(std::string("מנוע: ")+e.what());
