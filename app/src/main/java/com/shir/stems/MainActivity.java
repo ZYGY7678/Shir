@@ -307,9 +307,9 @@ public class MainActivity extends Activity {
 
     private String ensureModel()throws Exception{
         File dir=new File(getFilesDir(),"models"); dir.mkdirs();
-        File model=new File(dir,"ggml-htdemucs-4s-f16.bin");
+        File model=new File(dir,"ggml-hdemucs-mmi-v3-f16.bin");
         if(model.exists() && model.length()>80000000)return model.getAbsolutePath();
-        InputStream in=getAssets().open("ggml-htdemucs-4s-f16.bin"); FileOutputStream out=new FileOutputStream(model);
+        InputStream in=getAssets().open("ggml-hdemucs-mmi-v3-f16.bin"); FileOutputStream out=new FileOutputStream(model);
         byte[] buf=new byte[1024*1024]; int n; while((n=in.read(buf))!=-1)out.write(buf,0,n);
         in.close(); out.close(); return model.getAbsolutePath();
     }
