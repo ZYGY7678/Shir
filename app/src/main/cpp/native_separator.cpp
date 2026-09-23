@@ -10,6 +10,7 @@
 #include <vector>
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 
 #include "model.hpp"
 #include "dsp.hpp"
